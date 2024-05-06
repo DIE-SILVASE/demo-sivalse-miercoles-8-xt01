@@ -5,10 +5,10 @@ run-name: Test to check how actions work
 on: 
   push:
     branches:
-      - demo
+      - stable
   pull_request:
     branches:
-      - demo
+      - stable
   workflow_dispatch:
 env:
   TESTS: "test_actions"               # TESTS - ADD HERE IF YOU WANT TO USE MORE TESTS   
