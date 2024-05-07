@@ -1,0 +1,190 @@
+# Test file for building and executing the project
+# Created by Eugenio Cano Muñoz for the SDG2 course
+name: test-demo
+run-name: Test to check how actions work
+on: 
+  push:
+    branches:
+      - stable
+  pull_request:
+    branches:
+      - stable
+  workflow_dispatch:
+env:
+  TESTS: "test_actions"               # TESTS - ADD HERE IF YOU WANT TO USE MORE TESTS   
+jobs:
+    build:
+        runs-on: ubuntu-latest
+        steps:
+            # Setup the workspace files
+            - name: Checkout the MatrixMCU repository
+              uses: actions/checkout@v4
+              with:
+                repository: 'greenlsi/MatrixMCU'
+                ref: 'dev-multiplatform'
+                path: './'
+
+            - name: Clone recursively
+              run: git submodule update --init --recursive
+
+            - name: Checkout the jukebox_silvase repository
+              uses: actions/checkout@v4
+              with:
+                path: './projects/jukebox'
+                token: '${{github.token}}'
+
+            - name: Install required build packages with apt
+              uses: awalsh128/cache-apt-pkgs-action@latest
+              with:
+                packages: build-essential openocd gdb-multiarch
+            
+            - name: Create MatrixMCU directory
+              run: sudo mkdir /opt/MatrixMCU && sudo mkdir /opt/MatrixMCU/bin
+
+            - name: Give permissions to MatrixMCU directory
+              run: sudo chmod 777 /opt/MatrixMCU #&& sudo chmod 777 /opt/MatrixMCU/bin
+            
+            - name: Load cached arm toolchain
+              uses: actions/cache@v4
+              id: matrixMCU-install
+              with:
+                key: arm-toolchain
+                path: /tmp/MatrixMCU
+                fail-on-cache-miss: false
+            
+            - name: move MatrixMCU files to /opt/MatrixMCU
+              if: steps.matrixMCU-install.outputs.cache-hit == 'true'
+              run: sudo mv /tmp/MatrixMCU/* /opt/MatrixMCU
+                
+            - name: Download install files if the program wasn't in cache
+              if: steps.matrixMCU-install.outputs.cache-hit != 'true'
+              run: wget https://developer.arm.com/-/media/Files/downloads/gnu/13.2.rel1/binrel/arm-gnu-toolchain-13.2.rel1-x86_64-arm-none-eabi.tar.xz -O /tmp/arm-toolchain.tar.xz
+
+            - name: Untar install files if the program wasn't in cache
+              if: steps.matrixMCU-install.outputs.cache-hit != 'true'
+              run: sudo tar -xf /tmp/arm-toolchain.tar.xz -C /opt/MatrixMCU
+            
+            - name: Create MatrixMCU directory in tmp folder
+              if: steps.matrixMCU-install.outputs.cache-hit != 'true'
+              run: sudo mkdir /tmp/MatrixMCU
+
+            - name: Copy files to tmp folder
+              if: steps.matrixMCU-install.outputs.cache-hit != 'true'
+              run: sudo cp -r /opt/MatrixMCU/* /tmp/MatrixMCU
+
+            - name: Save download files in cahce
+              if: steps.matrixMCU-install.outputs.cache-hit != 'true'
+              uses: actions/cache/save@v4
+              with:
+                key: arm-toolchain
+                path: /tmp/MatrixMCU
+
+            - name: Install cmake using snap
+              run: sudo snap install cmake --classic
+
+            - name: Create simbolic links to arm toolchain
+              run: sudo ln -s /opt/MatrixMCU/arm-gnu-toolchain-13.2.Rel1-x86_64-arm-none-eabi/bin/arm-none-eabi-gcc /opt/MatrixMCU/bin/arm-none-eabi-gcc && sudo ln -s /opt/MatrixMCU/arm-gnu-toolchain-13.2.Rel1-x86_64-arm-none-eabi/bin/arm-none-eabi-g++ /opt/MatrixMCU/bin/arm-none-eabi-g++ && sudo ln -s /opt/MatrixMCU/arm-gnu-toolchain-13.2.Rel1-x86_64-arm-none-eabi/bin/arm-none-eabi-objcopy /opt/MatrixMCU/bin/arm-none-eabi-objcopy && sudo ln -s /opt/MatrixMCU/arm-gnu-toolchain-13.2.Rel1-x86_64-arm-none-eabi/bin/arm-none-eabi-objdump /opt/MatrixMCU/bin/arm-none-eabi-objdump
+              
+            - name: Create symbolic link to multiarch
+              run: sudo ln -s $(which gdb-multiarch) /opt/MatrixMCU/bin/arm-none-eabi-gdb
+
+            - name: Add MatrixMCU to path
+              run: echo "/opt/MatrixMCU/bin" >> $GITHUB_PATH
+
+            - name: check installed gcc
+              run: arm-none-eabi-gcc --version
+            
+            - name: check installed g++
+              run: arm-none-eabi-g++ --version
+
+            - name: check installed g++
+              run: arm-none-eabi-gdb --version
+
+            - name: check already installed objcopy
+              run: arm-none-eabi-objcopy --version
+
+            - name: check already installed objdump
+              run: arm-none-eabi-objdump --version
+
+              ## Build the project (only libraries, no target)
+            - name: run cmake fresh
+              run: cmake $(pwd)/projects/jukebox/ --fresh -B$(pwd)/projects/jukebox/build/stm32f405rg/Debug -DPLATFORM=stm32f405rg -DCMAKE_BUILD_TYPE=Debug -DUSE_SEMIHOSTING=true -DMATRIXMCU=$(pwd)
+
+            - name: build files
+              run: make -C$(pwd)/projects/jukebox/build/stm32f405rg/Debug $TESTS
+            
+              ## Saves build files to cache
+            - name: check if cache exists
+              id: bexists
+              uses: actions/cache@v4
+              with:
+                path: /tmp/jukebox-build
+                key: ${{runner.os}}-${{env.TESTS}}-${{hashFiles('**/projects/jukebox/port')}}-${{hashFiles('**/projects/jukebox/common')}}-${{hashFiles('**/projects/jukebox/test')}}
+                lookup-only: true
+
+            - name: Cache dosen't exists, move build files to tmp folder
+              if: steps.bexists.outputs.cache-hit != 'true'
+              run: sudo mv ./projects/jukebox/bin/stm32f405rg /tmp/jukebox-build
+            
+            - name: save executable to cache
+              uses: actions/cache/save@v4
+              if: steps.bexists.outputs.cache-hit != 'true'
+              with: 
+                path: /tmp/jukebox-build
+                key: ${{runner.os}}-${{env.TESTS}}-${{hashFiles('**/projects/jukebox/port')}}-${{hashFiles('**/projects/jukebox/common')}}-${{hashFiles('**/projects/jukebox/test')}}
+            
+    test:
+      runs-on: ubuntu-latest
+      needs: build
+      strategy:
+        matrix:
+          tests: [test_actions]                         # TESTS - ADD HERE IF YOU WANT TO USE MORE TESTS
+        fail-fast: false
+      steps:
+        # Get the build files from the cache, else the work fails
+        - name: Checkout jukebox repository
+          uses: actions/checkout@v4
+          with:
+            token: '${{github.token}}'
+            path: './jukebox'
+        
+        - name: Get build files from cache
+          uses: actions/cache@v4
+          with:
+            path: /tmp/jukebox-build
+            key: ${{runner.os}}-${{env.TESTS}}-${{hashFiles('**/jukebox/port')}}-${{hashFiles('**/jukebox/common')}}-${{hashFiles('**/jukebox/test')}}
+            fail-on-cache-miss: true
+
+        - name: copy files to ./bin
+          run: sudo mv /tmp/jukebox-build $(pwd)/bin
+
+        - name: Installs the required packages to run qemu
+          uses: awalsh128/cache-apt-pkgs-action@latest
+          with:
+            packages: sunxi-tools
+
+        - name: Download our compiled version of qemu it will fetch the latest release automatically
+          run: |
+            curl -L -H "Accept: application/vnd.github+json" -H "X-GitHub-Api-Version: 2022-11-28" https://api.github.com/repos/greenlsi/qemu_new/releases/latest | jq -r '.assets[0].browser_download_url' | xargs wget -q
+
+        - name: Unzip the downloaded file to the qemu folder
+          run: tar -xf build.tar.gz -C $(pwd)/
+
+        - name: tree the bin folder
+          run: tree $(pwd)/bin
+
+        - name: Give execution permisons to execute qemu
+          run: chmod +x $(pwd)/build -R
+
+        - name: run qemu
+          run: timeout 10 $(pwd)/build/qemu-system-arm -cpu cortex-m4 -machine netduinoplus2 -nographic -semihosting-config enable=on,target=native -kernel $(pwd)/bin/Debug/${{matrix.tests}}.elf > output || true
+
+        - name: echo output
+          run: cat output
+        
+        - name: check output
+          run: tail -n 3 output > output_cut
+
+        - name: check output
+          run: cmp output_cut $(pwd)/jukebox/test/ref_tests/${{matrix.tests}}.ref
+  
